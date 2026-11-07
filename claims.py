@@ -73,14 +73,16 @@ def _change_status(conn, claim_id, action, new_status, *, now, actor, agent=None
             )
 
         changed_at = now.isoformat(timespec="seconds")
-        if agent is None:
-            conn.execute(
-                "UPDATE claims SET status = ? WHERE id = ?", (new_status, claim_id)
-            )
-        else:
-            conn.execute(
-                "UPDATE claims SET status = ?, agent = ? WHERE id = ?",
-                (new_status, agent, claim_id),
+        # Guard on the status we validated: if another connection changed the
+        # claim since we read it, nothing matches and we refuse the change.
+        updated = conn.execute(
+            "UPDATE claims SET status = ?, agent = COALESCE(?, agent)"
+            " WHERE id = ? AND status = ?",
+            (new_status, agent, claim_id, old_status),
+        )
+        if updated.rowcount != 1:
+            raise ValueError(
+                f"cannot {action} claim {claim_id}: status changed concurrently"
             )
         conn.execute(
             "INSERT INTO history (claim_id, old_status, new_status, actor, changed_at)"
