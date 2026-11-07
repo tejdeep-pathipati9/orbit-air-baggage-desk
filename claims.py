@@ -46,6 +46,69 @@ def file_claim(conn, passenger, flight, type, tier, note=None, *, now, actor="de
     return claim_id
 
 
+# The single lookup table for status changes: current status -> allowed next statuses.
+TRANSITIONS = {
+    "open": ("assigned", "escalated"),
+    "assigned": ("resolved", "escalated"),
+    "escalated": ("assigned", "resolved"),
+    "resolved": ("closed",),
+    "closed": (),
+}
+
+
+def _change_status(conn, claim_id, action, new_status, *, now, actor, agent=None):
+    """Move a claim to new_status if TRANSITIONS allows it, logging history.
+
+    The claim update and its history row share one transaction, so they
+    succeed or fail together. `agent`, when given, is stored on the claim.
+    """
+    with conn:
+        claim = get_claim(conn, claim_id)
+        if claim is None:
+            raise ValueError(f"cannot {action} claim {claim_id}: claim not found")
+        old_status = claim["status"]
+        if new_status not in TRANSITIONS[old_status]:
+            raise ValueError(
+                f"cannot {action} claim {claim_id}: status is {old_status}"
+            )
+
+        changed_at = now.isoformat(timespec="seconds")
+        # Guard on the status we validated: if another connection changed the
+        # claim since we read it, nothing matches and we refuse the change.
+        updated = conn.execute(
+            "UPDATE claims SET status = ?, agent = COALESCE(?, agent)"
+            " WHERE id = ? AND status = ?",
+            (new_status, agent, claim_id, old_status),
+        )
+        if updated.rowcount != 1:
+            raise ValueError(
+                f"cannot {action} claim {claim_id}: status changed concurrently"
+            )
+        conn.execute(
+            "INSERT INTO history (claim_id, old_status, new_status, actor, changed_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (claim_id, old_status, new_status, actor, changed_at),
+        )
+
+
+def assign_claim(conn, claim_id, agent, *, now, actor="desk"):
+    """Assign an agent to an open or escalated claim, making it assigned."""
+    _require_text("agent", agent)
+    _change_status(
+        conn, claim_id, "assign", "assigned", now=now, actor=actor, agent=agent
+    )
+
+
+def resolve_claim(conn, claim_id, *, now, actor="desk"):
+    """Resolve an assigned or escalated claim."""
+    _change_status(conn, claim_id, "resolve", "resolved", now=now, actor=actor)
+
+
+def close_claim(conn, claim_id, *, now, actor="desk"):
+    """Close a resolved claim. Closed is final."""
+    _change_status(conn, claim_id, "close", "closed", now=now, actor=actor)
+
+
 def get_claim(conn, claim_id):
     return conn.execute("SELECT * FROM claims WHERE id = ?", (claim_id,)).fetchone()
 
