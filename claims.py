@@ -97,6 +97,16 @@ def assign_claim(conn, claim_id, agent, *, now, actor="desk"):
     )
 
 
+def resolve_claim(conn, claim_id, *, now, actor="desk"):
+    """Resolve an assigned or escalated claim."""
+    _change_status(conn, claim_id, "resolve", "resolved", now=now, actor=actor)
+
+
+def close_claim(conn, claim_id, *, now, actor="desk"):
+    """Close a resolved claim. Closed is final."""
+    _change_status(conn, claim_id, "close", "closed", now=now, actor=actor)
+
+
 def get_claim(conn, claim_id):
     return conn.execute("SELECT * FROM claims WHERE id = ?", (claim_id,)).fetchone()
 
