@@ -20,6 +20,9 @@ htmlcov/
 .env.*
 !.env.example
 
+# Local Claude prompt log
+.claude/prompt-log.md
+
 # Local assignment reference
 Orbit_Air_Baggage_Desk_Agent_Requirements.md
 
