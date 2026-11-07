@@ -45,3 +45,5 @@ Orbit_Air_Baggage_Desk_Agent_Requirements.md
 .vscode/
 .DS_Store
 Thumbs.db
+tdd-red.log
+.claude/tdd-red
