@@ -114,6 +114,25 @@ def is_overdue(claim, now):
     return now > datetime.fromisoformat(claim["deadline"])
 
 
+def escalate_overdue(conn, *, now, actor="system"):
+    """Escalate every overdue open or assigned claim and return their ids.
+
+    Each claim is escalated through _change_status, so its status update and
+    history row commit or roll back together.
+    """
+    candidates = conn.execute(
+        "SELECT * FROM claims WHERE status IN ('open', 'assigned') ORDER BY id"
+    ).fetchall()
+    escalated = []
+    for claim in candidates:
+        if is_overdue(claim, now):
+            _change_status(
+                conn, claim["id"], "escalate", "escalated", now=now, actor=actor
+            )
+            escalated.append(claim["id"])
+    return escalated
+
+
 def get_claim(conn, claim_id):
     return conn.execute("SELECT * FROM claims WHERE id = ?", (claim_id,)).fetchone()
 
