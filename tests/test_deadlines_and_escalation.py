@@ -297,6 +297,29 @@ def test_failing_history_insert_leaves_every_overdue_claim_unchanged(conn):
     assert conn.execute("SELECT COUNT(*) FROM history").fetchone()[0] == 3
 
 
+def test_history_failure_on_the_last_claim_rolls_back_the_whole_batch(conn):
+    # Claims 1 and 2 escalate cleanly; only the final claim's history insert fails.
+    first = file_one(conn)
+    second = claim_in_status(conn, "assigned")
+    last = file_one(conn)
+    conn.execute(
+        "CREATE TRIGGER fail_last_history BEFORE INSERT ON history"
+        f" WHEN NEW.claim_id = {last} AND NEW.new_status = 'escalated'"
+        " BEGIN SELECT RAISE(ABORT, 'history unavailable'); END"
+    )
+    conn.commit()
+    ids = [first, second, last]
+    before = {claim_id: snapshot(conn, claim_id) for claim_id in ids}
+
+    with pytest.raises(sqlite3.Error, match="history unavailable"):
+        claims.escalate_overdue(conn, now=FILED + timedelta(hours=5))
+
+    # The earlier claims must not stay escalated, and none may have new history.
+    for claim_id in ids:
+        assert snapshot(conn, claim_id) == before[claim_id]
+    assert not conn.in_transaction
+
+
 def test_successful_escalation_is_committed_for_other_connections(conn, tmp_path):
     import db
 
