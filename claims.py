@@ -56,38 +56,45 @@ TRANSITIONS = {
 }
 
 
-def _change_status(conn, claim_id, action, new_status, *, now, actor, agent=None):
+def _apply_status_change(
+    conn, claim_id, action, new_status, *, now, actor, agent=None
+):
     """Move a claim to new_status if TRANSITIONS allows it, logging history.
 
-    The claim update and its history row share one transaction, so they
-    succeed or fail together. `agent`, when given, is stored on the claim.
+    Runs inside the caller's transaction and never commits, so callers decide
+    what succeeds or fails together. `agent`, when given, is stored on the claim.
     """
-    with conn:
-        claim = get_claim(conn, claim_id)
-        if claim is None:
-            raise ValueError(f"cannot {action} claim {claim_id}: claim not found")
-        old_status = claim["status"]
-        if new_status not in TRANSITIONS[old_status]:
-            raise ValueError(
-                f"cannot {action} claim {claim_id}: status is {old_status}"
-            )
+    claim = get_claim(conn, claim_id)
+    if claim is None:
+        raise ValueError(f"cannot {action} claim {claim_id}: claim not found")
+    old_status = claim["status"]
+    if new_status not in TRANSITIONS[old_status]:
+        raise ValueError(f"cannot {action} claim {claim_id}: status is {old_status}")
 
-        changed_at = now.isoformat(timespec="seconds")
-        # Guard on the status we validated: if another connection changed the
-        # claim since we read it, nothing matches and we refuse the change.
-        updated = conn.execute(
-            "UPDATE claims SET status = ?, agent = COALESCE(?, agent)"
-            " WHERE id = ? AND status = ?",
-            (new_status, agent, claim_id, old_status),
+    changed_at = now.isoformat(timespec="seconds")
+    # Guard on the status we validated: if another connection changed the
+    # claim since we read it, nothing matches and we refuse the change.
+    updated = conn.execute(
+        "UPDATE claims SET status = ?, agent = COALESCE(?, agent)"
+        " WHERE id = ? AND status = ?",
+        (new_status, agent, claim_id, old_status),
+    )
+    if updated.rowcount != 1:
+        raise ValueError(
+            f"cannot {action} claim {claim_id}: status changed concurrently"
         )
-        if updated.rowcount != 1:
-            raise ValueError(
-                f"cannot {action} claim {claim_id}: status changed concurrently"
-            )
-        conn.execute(
-            "INSERT INTO history (claim_id, old_status, new_status, actor, changed_at)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (claim_id, old_status, new_status, actor, changed_at),
+    conn.execute(
+        "INSERT INTO history (claim_id, old_status, new_status, actor, changed_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (claim_id, old_status, new_status, actor, changed_at),
+    )
+
+
+def _change_status(conn, claim_id, action, new_status, *, now, actor, agent=None):
+    """Change one claim's status and log it in a single transaction."""
+    with conn:
+        _apply_status_change(
+            conn, claim_id, action, new_status, now=now, actor=actor, agent=agent
         )
 
 
@@ -117,19 +124,20 @@ def is_overdue(claim, now):
 def escalate_overdue(conn, *, now, actor="system"):
     """Escalate every overdue open or assigned claim and return their ids.
 
-    Each claim is escalated through _change_status, so its status update and
-    history row commit or roll back together.
+    The whole run is one transaction: every status update and its history row
+    commit together, and if any write fails nothing is escalated.
     """
-    candidates = conn.execute(
-        "SELECT * FROM claims WHERE status IN ('open', 'assigned') ORDER BY id"
-    ).fetchall()
     escalated = []
-    for claim in candidates:
-        if is_overdue(claim, now):
-            _change_status(
-                conn, claim["id"], "escalate", "escalated", now=now, actor=actor
-            )
-            escalated.append(claim["id"])
+    with conn:
+        candidates = conn.execute(
+            "SELECT * FROM claims WHERE status IN ('open', 'assigned') ORDER BY id"
+        ).fetchall()
+        for claim in candidates:
+            if is_overdue(claim, now):
+                _apply_status_change(
+                    conn, claim["id"], "escalate", "escalated", now=now, actor=actor
+                )
+                escalated.append(claim["id"])
     return escalated
 
 
