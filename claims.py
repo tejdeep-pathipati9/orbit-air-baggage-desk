@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from db import TIERS, TYPES
 
@@ -107,6 +107,11 @@ def resolve_claim(conn, claim_id, *, now, actor="desk"):
 def close_claim(conn, claim_id, *, now, actor="desk"):
     """Close a resolved claim. Closed is final."""
     _change_status(conn, claim_id, "close", "closed", now=now, actor=actor)
+
+
+def is_overdue(claim, now):
+    """A claim is overdue only when now is strictly after its deadline."""
+    return now > datetime.fromisoformat(claim["deadline"])
 
 
 def get_claim(conn, claim_id):
