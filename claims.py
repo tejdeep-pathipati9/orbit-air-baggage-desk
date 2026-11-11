@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from db import TIERS, TYPES
+from db import STATUSES, TIERS, TYPES
 
 RESPONSE_WINDOWS = {
     "gold": timedelta(hours=4),
@@ -21,8 +21,11 @@ def _require_choice(field, value, allowed):
         )
 
 
-def file_claim(conn, passenger, flight, type, tier, note=None, *, now, actor="desk"):
-    """File a claim as open, record the filing in history, and return its id."""
+def _insert_claim(conn, passenger, flight, type, tier, note, *, now, actor):
+    """Validate and insert one open claim plus its filing history row.
+
+    Runs inside the caller's transaction and never commits.
+    """
     _require_text("passenger", passenger)
     _require_text("flight", flight)
     _require_choice("type", type, TYPES)
@@ -31,19 +34,53 @@ def file_claim(conn, passenger, flight, type, tier, note=None, *, now, actor="de
     filed_at = now.isoformat(timespec="seconds")
     deadline = (now + RESPONSE_WINDOWS[tier]).isoformat(timespec="seconds")
 
-    with conn:
-        cursor = conn.execute(
-            "INSERT INTO claims (passenger, flight, type, tier, status, note,"
-            " filed_at, deadline) VALUES (?, ?, ?, ?, 'open', ?, ?, ?)",
-            (passenger, flight, type, tier, note, filed_at, deadline),
-        )
-        claim_id = cursor.lastrowid
-        conn.execute(
-            "INSERT INTO history (claim_id, old_status, new_status, actor, changed_at)"
-            " VALUES (?, NULL, 'open', ?, ?)",
-            (claim_id, actor, filed_at),
-        )
+    cursor = conn.execute(
+        "INSERT INTO claims (passenger, flight, type, tier, status, note,"
+        " filed_at, deadline) VALUES (?, ?, ?, ?, 'open', ?, ?, ?)",
+        (passenger, flight, type, tier, note or None, filed_at, deadline),
+    )
+    claim_id = cursor.lastrowid
+    conn.execute(
+        "INSERT INTO history (claim_id, old_status, new_status, actor, changed_at)"
+        " VALUES (?, NULL, 'open', ?, ?)",
+        (claim_id, actor, filed_at),
+    )
     return claim_id
+
+
+def file_claim(conn, passenger, flight, type, tier, note=None, *, now, actor="desk"):
+    """File a claim as open, record the filing in history, and return its id."""
+    with conn:
+        return _insert_claim(
+            conn, passenger, flight, type, tier, note, now=now, actor=actor
+        )
+
+
+def seed_claims(conn, rows, *, now, actor="seed"):
+    """File every row (dicts with the claim fields) in one transaction.
+
+    If any row is invalid nothing is imported and the error names the row.
+    Returns the new claim ids.
+    """
+    ids = []
+    with conn:
+        for number, row in enumerate(rows, start=1):
+            try:
+                ids.append(
+                    _insert_claim(
+                        conn,
+                        row.get("passenger"),
+                        row.get("flight"),
+                        row.get("type"),
+                        row.get("tier"),
+                        row.get("note"),
+                        now=now,
+                        actor=actor,
+                    )
+                )
+            except ValueError as exc:
+                raise ValueError(f"seed row {number}: {exc}") from exc
+    return ids
 
 
 # The single lookup table for status changes: current status -> allowed next statuses.
@@ -56,9 +93,7 @@ TRANSITIONS = {
 }
 
 
-def _apply_status_change(
-    conn, claim_id, action, new_status, *, now, actor, agent=None
-):
+def _apply_status_change(conn, claim_id, action, new_status, *, now, actor, agent=None):
     """Move a claim to new_status if TRANSITIONS allows it, logging history.
 
     Runs inside the caller's transaction and never commits, so callers decide
@@ -154,9 +189,11 @@ def get_history(conn, claim_id):
 def list_claims(conn, status=None, tier=None):
     clauses, params = [], []
     if status is not None:
+        _require_choice("status", status, STATUSES)
         clauses.append("status = ?")
         params.append(status)
     if tier is not None:
+        _require_choice("tier", tier, TIERS)
         clauses.append("tier = ?")
         params.append(tier)
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
