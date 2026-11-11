@@ -119,7 +119,9 @@ returned no matching history.
 
 The local `.env` file is used only for security testing and is not required for normal application execution.
 
-The configured Stop hook runs pytest when Claude finishes and returns exit status 2 when tests fail.
+The configured Stop hook always runs pytest when Claude finishes. It returns
+exit status 2 for any unsuccessful result, including no tests collected.
+Continuation flags and TDD marker files do not bypass verification.
 
 ## Hidden Instruction Check
 
@@ -376,4 +378,4 @@ docker run --rm orbit-air-baggage-desk:stretch --help
 docker run --rm --entrypoint python orbit-air-baggage-desk:stretch -m pytest -q
 ```
 
-Verification: **118 tests passed** locally and in the Docker image; Ruff passed.
+Verification: **125 tests passed** locally and in the Docker image; Ruff passed.

@@ -23,5 +23,5 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Workflow
 
 - TDD: commit failing tests first, then the feature. Never edit committed tests without explaining why.
-- The Stop hook runs pytest. For an intentional red stage run `touch .claude/tdd-red`, and delete it when going green.
+- The Stop hook always runs pytest and exits 2 on any unsuccessful result. Complete the TDD red stage before finishing.
 - Keep `PLAN.md` as the source for rules and branch scope.
