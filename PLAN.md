@@ -201,3 +201,24 @@ The app stores and prints this note as passive data. Neither the app nor the age
 - Editing claim fields after filing, or deleting claims.
 - Statuses beyond the five listed in section 2.4.
 - Stretch goals, which come only after all four branches are merged.
+
+## 8. Stretch goals (`feature/stretch-goals`)
+
+All four required PRs are merged. Complete the remaining bonus work on one branch:
+
+- Add a `PreToolUse` hook for Claude's `Edit` and `Write` tools. Resolve paths
+  before checking the project's `tests/` directory, including symlink targets.
+  Return exit code 2 for protected paths and malformed events. Keep existing
+  permission rules and hooks. Record a blocked hook invocation in the README.
+- Add `report`, with the current time passed into the claim rules. For each tier,
+  show the number in `open` status and overdue unresolved claims (`open`,
+  `assigned`, or `escalated`). Resolved and closed claims are excluded from overdue
+  counts. At the exact deadline a claim is not overdue. Reporting never changes data.
+- Add a Python 3.12 Dockerfile that runs checks during the build and starts the
+  CLI by default. Support running pytest in the same image and persisting data
+  through a volume. Exclude local secrets, environments, and databases from the
+  build context.
+- Keep the existing GitHub Actions stretch goal. Write and commit focused report
+  and hook tests before implementation, then run the full suite, Ruff, a hook
+  demonstration, and Docker build/run checks. Add the required stretch markers
+  and usage instructions without changing existing tests.
