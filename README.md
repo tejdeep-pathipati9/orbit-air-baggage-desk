@@ -35,6 +35,7 @@ Without `--now`, the application uses the current local time.
 | `escalate` | `python main.py --now 2026-11-02T18:01:00 escalate` |
 | `history` | `python main.py history 1` |
 | `seed` | `python main.py seed seed_claims.csv` |
+| `report` (stretch goal) | `python main.py --now 2026-11-02T18:01:00 report` |
 
 The `list` command accepts optional status and tier filters.
 
@@ -326,4 +327,53 @@ Regression coverage was added in `tests/test_cli_hardening.py` for the review fi
 
 The targeted cases reproduced the failures before the corrections and passed afterward. Filter checks confirmed behavior that was already working. The review fixes added a separate regression file without changing the existing tests.
 
-The full suite reported **106 passed**, and `ruff check .` was clean. Invalid database paths and malformed CSV files produce clear CLI errors instead of tracebacks. Invalid claim rows roll back the seed transaction, while CSV structure errors are rejected before insertion.
+After the CLI review, **106 tests passed** and Ruff was clean.
+
+## Stretch Goals
+
+| Goal | Implementation |
+| --- | --- |
+| STRETCH GOAL 1 | `.claude/hooks/protect_tests.py`, configured in `.claude/settings.json` |
+| STRETCH GOAL 2 | `claim_report` in `claims.py`, exposed by the `report` command |
+| STRETCH GOAL 3 | `.github/workflows/ci.yml` runs pytest and Ruff on pull requests and pushes to `main` |
+| STRETCH GOAL 4 | `Dockerfile` runs checks during the build and starts the CLI |
+
+### Test-edit protection
+
+The configured `PreToolUse` hook blocks Claude's `Edit` and `Write` calls to
+`tests/`, including symlink targets. It does not intercept shell or manual edits.
+Verification used a simulated `Write` event:
+
+```sh
+CLAUDE_PROJECT_DIR="$PWD" python3 .claude/hooks/protect_tests.py <<'JSON'
+{"tool_name":"Write","tool_input":{"file_path":"tests/test_cli.py","content":"# blocked"}}
+JSON
+printf 'exit: %s\n' "$?"
+```
+
+```text
+Blocked: tests/ is protected from Claude edits.
+exit: 2
+```
+
+### Tier report
+
+`Open` counts claims in `open` status. `Overdue` counts `open`, `assigned`, and
+`escalated` claims strictly past their deadline. Reporting does not change data.
+
+```sh
+python main.py --now 2026-11-02T18:01:00 report
+```
+
+### Docker
+
+The Python 3.12 image runs pytest and Ruff during the build. `.dockerignore`
+excludes local secrets, environments, and databases.
+
+```sh
+docker build -t orbit-air-baggage-desk:stretch .
+docker run --rm orbit-air-baggage-desk:stretch --help
+docker run --rm --entrypoint python orbit-air-baggage-desk:stretch -m pytest -q
+```
+
+Verification: **118 tests passed** locally and in the Docker image; Ruff passed.
