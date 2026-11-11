@@ -1,5 +1,6 @@
 import argparse
 import csv
+import sqlite3
 import sys
 from datetime import datetime
 
@@ -134,18 +135,38 @@ def cmd_history(conn, args, now):
         )
 
 
-def cmd_seed(conn, args, now):
+def read_seed_rows(path):
+    """Read the seed CSV into row dicts, rejecting any malformed row."""
     try:
-        with open(args.path, newline="", encoding="utf-8") as handle:
-            reader = csv.DictReader(handle)
-            if reader.fieldnames != SEED_HEADER:
+        # utf-8-sig also accepts files saved with a byte-order mark (e.g. Excel).
+        with open(path, newline="", encoding="utf-8-sig") as handle:
+            reader = csv.reader(handle)
+            header = next(reader, None)
+            if header != SEED_HEADER:
                 raise ValueError(
                     f"seed file header must be exactly: {','.join(SEED_HEADER)}"
                 )
-            rows = list(reader)
+            rows = []
+            for number, values in enumerate(reader, start=1):
+                if not values:  # skip blank lines
+                    continue
+                if len(values) != len(SEED_HEADER):
+                    raise ValueError(
+                        f"seed row {number}: expected {len(SEED_HEADER)} columns, "
+                        f"found {len(values)} (quote any note that contains a comma)"
+                    )
+                rows.append(dict(zip(SEED_HEADER, values, strict=True)))
+            return rows
     except OSError as exc:
-        raise ValueError(f"cannot read seed file {args.path}: {exc.strerror}") from exc
-    ids = claims.seed_claims(conn, rows, now=now)
+        raise ValueError(f"cannot read seed file {path}: {exc.strerror}") from exc
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"seed file {path} is not valid UTF-8") from exc
+    except csv.Error as exc:
+        raise ValueError(f"seed file {path} is not valid CSV: {exc}") from exc
+
+
+def cmd_seed(conn, args, now):
+    ids = claims.seed_claims(conn, read_seed_rows(args.path), now=now)
     print(f"Imported {len(ids)} claims")
 
 
@@ -165,15 +186,17 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     # The only place the real clock is read; rule code always receives `now`.
     now = args.now or datetime.now().replace(microsecond=0)
-    conn = db.connect()
+    conn = None
     try:
+        conn = db.connect()
         db.init_db(conn)
         COMMANDS[args.command](conn, args, now)
-    except ValueError as exc:
+    except (ValueError, sqlite3.Error) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
     return 0
 
 

@@ -37,7 +37,7 @@ def _insert_claim(conn, passenger, flight, type, tier, note, *, now, actor):
     cursor = conn.execute(
         "INSERT INTO claims (passenger, flight, type, tier, status, note,"
         " filed_at, deadline) VALUES (?, ?, ?, ?, 'open', ?, ?, ?)",
-        (passenger, flight, type, tier, note, filed_at, deadline),
+        (passenger, flight, type, tier, note or None, filed_at, deadline),
     )
     claim_id = cursor.lastrowid
     conn.execute(
@@ -73,7 +73,7 @@ def seed_claims(conn, rows, *, now, actor="seed"):
                         row.get("flight"),
                         row.get("type"),
                         row.get("tier"),
-                        row.get("note") or None,
+                        row.get("note"),
                         now=now,
                         actor=actor,
                     )

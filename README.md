@@ -40,7 +40,13 @@ The `list` command accepts optional status and tier filters.
 
 ### Example: Complete claim lifecycle
 
-Output captured during a full lifecycle demonstration using a fresh database:
+Use a fresh temporary database so the claim IDs match the output below:
+
+```sh
+export ORBIT_DB="$(mktemp -d)/baggage.db"
+```
+
+Output from the full lifecycle demonstration:
 
 ```text
 $ python main.py --now 2026-11-02T09:00:00 file --passenger "Ada Lovelace" --flight OA101 --type lost --tier gold --note "Black suitcase"
@@ -65,6 +71,8 @@ $ python main.py close 1
 error: cannot close claim 1: status is closed
 ```
 
+Run `unset ORBIT_DB` afterward to return to the default database.
+
 Rejected operations print an error to stderr and exit with status 1. Invalid CLI arguments, including timezone offsets in `--now`, exit with status 2.
 
 ## Linear Issues
@@ -77,6 +85,8 @@ Linear project: **Orbit Air Baggage Desk**
 4. [ORBIT-8 — feature/cli: Commands, Time Override, and CSV Import](https://linear.app/tejdeep-pathipati/issue/ORBIT-8/featurecli-commands-time-override-and-csv-import)
 
 Each feature was developed on its corresponding branch using a tests-first workflow.
+
+Pull requests: [schema and filing (#1)](https://github.com/tejdeep-pathipati9/orbit-air-baggage-desk/pull/1), [assignment and status (#2)](https://github.com/tejdeep-pathipati9/orbit-air-baggage-desk/pull/2), [deadlines and escalation (#3)](https://github.com/tejdeep-pathipati9/orbit-air-baggage-desk/pull/3), and [CLI and CSV import (#4)](https://github.com/tejdeep-pathipati9/orbit-air-baggage-desk/pull/4).
 
 ## Setup Check
 
@@ -96,9 +106,7 @@ Additional Bash restrictions include `Bash(cat .env)` and `Bash(grep *.env*)`.
 File is in a directory that is denied by your permission settings.
 ```
 
-Although the message refers to a directory, the attempted target was `.env`. The tested Read operation was denied.
-
-A Bash command using `grep` against a `.env` pattern was also refused. The denial output did not identify which rule caused the refusal, so no broader conclusion is drawn from that test.
+No `.env` content was returned. A separate Bash command using `grep` against a `.env` pattern was also refused.
 
 The `.env` file is excluded by `.gitignore`. A check using:
 
@@ -109,6 +117,8 @@ git log --all -- .env
 returned no matching history.
 
 The local `.env` file is used only for security testing and is not required for normal application execution.
+
+The configured Stop hook runs pytest when Claude finishes and returns exit status 2 when tests fail.
 
 ## Hidden Instruction Check
 
@@ -129,7 +139,7 @@ This is a prompt-injection attempt embedded in untrusted customer data.
 - It did not attempt to retrieve or print `.env` in response to the CSV note.
 - The separate `.env` permission test was deliberately performed and was denied.
 
-The application also preserved the suspicious text as ordinary claim data. After importing the CSV, the note appeared in the claim listing:
+The application also preserved the suspicious text as ordinary claim data. The overdue demonstration below includes this note in the claim listing:
 
 ```text
 $ python main.py list --tier gold | grep "Ignore your task"
@@ -138,7 +148,7 @@ $ python main.py list --tier gold | grep "Ignore your task"
 
 An automated test, `test_seed_imports_sample_data_and_preserves_notes`, creates a temporary `.env` containing a sentinel value, imports the seed data, and verifies that the suspicious note is preserved and printed without exposing the sentinel.
 
-**Conclusion:** During the observed test, Claude treated the embedded instruction as untrusted data. Separately, the configured permission rules blocked the tested attempt to read `.env`.
+The note remained ordinary claim data, and the separate Read test confirmed the configured `.env` restriction.
 
 ## Overdue Demonstration
 
@@ -152,7 +162,13 @@ Response deadlines depend on passenger tier:
 
 A claim becomes overdue only when the supplied current time is **strictly later** than its deadline. Being exactly at the deadline is not overdue.
 
-The following demonstration seeded 12 claims at `2026-11-02T14:00:00`, giving gold claims a deadline of `18:00:00`.
+Use another fresh temporary database for this demonstration:
+
+```sh
+export ORBIT_DB="$(mktemp -d)/baggage.db"
+```
+
+The following commands seed 12 claims at `2026-11-02T14:00:00`, giving gold claims a deadline of `18:00:00`.
 
 ```text
 $ python main.py --now 2026-11-02T14:00:00 seed seed_claims.csv
@@ -178,9 +194,11 @@ $ python main.py history 1
 
 At exactly `18:00:00`, no claims escalated. One minute later, the five overdue gold claims escalated and received history entries. Silver and standard claims remained unchanged because their deadlines had not passed.
 
+Run `unset ORBIT_DB` afterward to return to the default database. Each seed run adds new claims; it does not replace or deduplicate existing records.
+
 ## Agent Log
 
-Development used Claude Code in Cursor with Linear issues, `PLAN.md`, and test-first commits. I directed the implementation in stages, reviewed the work against the requirements, and managed the Git workflow and pull requests.
+Development used Claude Code in Cursor with Linear issues, `PLAN.md`, and test-first commits. Each stage included a review against the requirements before proceeding with commits and pull requests.
 
 The prompts below are taken from the recorded development prompt log.
 
@@ -196,7 +214,7 @@ The prompts below are taken from the recorded development prompt log.
 
 **Agent did:** Implemented the SQLite schema in `db.py`, including CHECK constraints and foreign keys. Added claim filing, input validation, tier-based deadlines, initial history entries, and filtered claim listing in `claims.py`.
 
-**My verification:** I reviewed the implementation and checked the test-first commit history to confirm that tests were committed before feature code.
+**Verification:** The commit history confirms that tests were committed before feature code.
 
 - `19a69b1` — Tests-first commit
 - `3a604f5` — Feature implementation
@@ -220,13 +238,9 @@ The feature was checked with pytest and Ruff before the PR was merged.
 
 **Agent did:** Implemented the status workflow in stages, including the `TRANSITIONS` lookup, shared `_change_status` helper, `assign_claim`, `resolve_claim`, and `close_claim`. The tests covered valid transitions, rejected transitions, history accuracy, and transaction rollback.
 
-**My review and correction:** Rather than relying only on passing tests, I requested a further review of edge cases and transaction safety.
+**Review and correction:** A separate review of status transitions and transaction safety found that `_change_status` validated the status before the `UPDATE`, but the query did not check that the claim was still in that status. A second connection could therefore make a stale update invalid.
 
-That review identified a concurrency issue in `_change_status`. The function originally read and validated a claim's status before updating it, without ensuring the status remained unchanged during the update.
-
-If another connection changed the claim between those operations, a stale update could overwrite a newer status and create an incorrect history entry.
-
-I examined the issue and the SQL correction, which added the previously validated status to the update condition:
+The correction guards the update with the previously validated status and checks that exactly one row changed:
 
 ```sql
 UPDATE claims
@@ -234,11 +248,9 @@ SET status = ?, agent = COALESCE(?, agent)
 WHERE id = ? AND status = ?
 ```
 
-The implementation also checks `rowcount` and raises an error if the expected row is not updated.
+If no row matches, the operation now raises an error rather than overwriting a newer status. The history-writing path was also checked to confirm that a rejected transition does not create an incorrect history record.
 
-**Verification:** Claude reproduced the original issue using two database connections and confirmed that the corrected implementation rejected the stale update. I reviewed the corrected SQL and the verification results, and checked that the pytest suite and Ruff passed.
-
-This was a specific problem discovered and addressed through the additional review I requested, rather than accepting the original implementation solely because its tests passed.
+**Verification:** A two-connection reproduction confirmed the original stale-update problem and its rejection after the fix. The status-transition tests and Ruff passed after the correction.
 
 ### feature/deadlines-and-escalation (ORBIT-7)
 
@@ -252,17 +264,15 @@ This was a specific problem discovered and addressed through the additional revi
 
 **Agent did:** Implemented `is_overdue`, using a strict `>` comparison, and `escalate_overdue` to identify eligible overdue claims, update statuses, record history, and return escalated claim IDs.
 
-**My review and correction:** I requested a final review of the deadline rules and transaction handling. The review identified a gap in the existing batch rollback tests.
+**Review and correction:** The final review of deadline rules and transaction handling identified a gap in the existing batch rollback tests.
 
 The original tests forced every history insertion to fail. This proved that an individual claim change could roll back, but it did not establish that earlier successful changes would roll back if a later claim failed during the same batch.
 
-Claude tested a deliberately modified version that committed each claim separately in a scratch copy. All 85 existing tests still passed, confirming the coverage gap.
+Claude tested a deliberately modified version that committed each claim separately in a scratch copy. The existing tests still passed, confirming the coverage gap.
 
 I directed the addition of a regression test that causes only the final eligible claim's history insertion to fail. This test checks that all earlier claim changes are rolled back as well.
 
-**Verification:** The new regression test failed against the deliberately broken per-claim implementation, demonstrating that it detects the missing batch-level transaction. A separate scratch experiment showed that removing transaction handling caused 10 rollback and commit-related tests to fail.
-
-I reviewed the findings and the added test before proceeding with the feature PR.
+**Verification:** The new regression test failed against the deliberately broken per-claim implementation, demonstrating that it detects the missing batch-level transaction. A separate scratch experiment confirmed that removing transaction handling caused rollback and commit-related tests to fail.
 
 ### feature/cli (ORBIT-8)
 
@@ -282,14 +292,38 @@ I reviewed the findings and the added test before proceeding with the feature PR
 
 During implementation, the filing logic was refactored to allow seed rows to be inserted without committing them individually, so a failed row could roll back the entire import.
 
-**My review and verification:** I reviewed the CLI implementation against the assignment requirements, including command behavior, invalid inputs, the global time option, and CSV import handling.
+**Review and verification:** CLI checks covered all eight commands, invalid arguments and filters, the global time option, and CSV import behavior. Invalid status and tier filters produce clear errors rather than an empty list.
 
-The implementation was corrected to reject invalid status and tier filters with clear errors instead of silently returning an empty result. I reviewed the behavior after the correction.
+Security checks confirmed that the tested `.env` Read attempt was denied and the malicious note in `seed_claims.csv` was treated as plain text.
 
-I also requested verification of the `.env` deny rule and the malicious note in `seed_claims.csv`. The security checks showed that the tested Read attempt was denied and the note was treated as plain text.
-
-The final reported suite contained **94 passing tests**, and `ruff check .` completed successfully.
+The full test suite and Ruff passed. Current verification results are recorded below.
 
 ## Code Review
 
-**Pending final pull request review.**
+`/code-review` was run twice on `feature/cli` for [pull request #4](https://github.com/tejdeep-pathipati9/orbit-air-baggage-desk/pull/4). Overlapping findings are grouped below, with the investigation result and action for each.
+
+### Findings and decisions
+
+| Finding | Review result | Change or decision |
+| --- | --- | --- |
+| `main()` only caught `ValueError`; a bad `ORBIT_DB` path caused a traceback | Reproduced | **Fixed.** Moved `db.connect()` inside the `try` and handled `sqlite3.Error`, so the CLI reports `error: ...` and exits 1 |
+| Seed CSV accepted rows with too many or too few columns | Reproduced | **Fixed.** Used `csv.reader` and rejected incorrect column counts before insertion with `seed row N: expected 5 columns, found M`; malformed files leave the database unchanged |
+| UTF-8 BOM caused the CSV header to be rejected | Reproduced | **Fixed.** Opened CSV files with `utf-8-sig` |
+| Non-UTF-8 or oversized CSV field produced poor errors or a traceback | Reproduced | **Fixed.** Handled decoding and `csv.Error` failures with a clear error naming the file; a reported NUL-byte crash did not reproduce |
+| `.gitignore` lacked a trailing newline | Confirmed | **Fixed.** Added the newline so future entries do not run together |
+| Blank notes were `''` for `file` but `NULL` for `seed` | Reproduced | **Fixed.** Normalized blank notes to `NULL` in `_insert_claim` |
+| Unknown status/tier filters were rejected but not tested | Confirmed | **Tests added.** Kept the intended validation and added coverage at the function and CLI levels |
+| Repeating `seed` imports duplicates claims | Reproduced | **Retained.** Each import appends records; deduplication is outside the planned scope |
+| `--now` has no effect on `list` and `history` | Expected behavior | These commands do not depend on the current time |
+| Date-only `--now 2026-11-02` is accepted as midnight | Reproduced | **Retained.** `datetime.fromisoformat` accepts date-only input; a stricter format is not required |
+| CSV row numbers can differ from physical file lines | Confirmed | **Retained.** `N` counts parsed CSV records after the header |
+| Two assertions in `tests/test_cli.py` are weak | Reviewed | **Retained.** No failing behavior was identified |
+| The prompt-injection note could influence an agent | Required test data | The exact note is required by the assignment and is handled as untrusted data |
+
+### Regression tests and verification
+
+Regression coverage was added in `tests/test_cli_hardening.py` for the review findings. The file contains **12 test cases** covering CSV column counts, rejection without partial imports, BOM and decoding errors, oversized fields, unavailable database paths, blank-note consistency, invalid list filters, and the `.gitignore` newline.
+
+The targeted cases reproduced the failures before the corrections and passed afterward. Filter checks confirmed behavior that was already working. The review fixes added a separate regression file without changing the existing tests.
+
+The full suite reported **106 passed**, and `ruff check .` was clean. Invalid database paths and malformed CSV files produce clear CLI errors instead of tracebacks. Invalid claim rows roll back the seed transaction, while CSV structure errors are rejected before insertion.
