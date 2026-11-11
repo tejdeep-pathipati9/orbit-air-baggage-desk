@@ -156,6 +156,23 @@ def is_overdue(claim, now):
     return now > datetime.fromisoformat(claim["deadline"])
 
 
+# STRETCH GOAL 2
+def claim_report(conn, *, now):
+    """Count open and overdue unresolved claims by tier without changing data."""
+    counts = {tier: {"tier": tier, "open": 0, "overdue": 0} for tier in TIERS}
+    rows = conn.execute(
+        "SELECT tier, status, deadline FROM claims"
+        " WHERE status IN ('open', 'assigned', 'escalated')"
+    )
+    for claim in rows:
+        tier = counts[claim["tier"]]
+        if claim["status"] == "open":
+            tier["open"] += 1
+        if is_overdue(claim, now):
+            tier["overdue"] += 1
+    return list(counts.values())
+
+
 def escalate_overdue(conn, *, now, actor="system"):
     """Escalate every overdue open or assigned claim and return their ids.
 

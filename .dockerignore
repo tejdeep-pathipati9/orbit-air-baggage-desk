@@ -1,0 +1,15 @@
+.git
+.venv
+.env
+.env.*
+**/.env
+**/.env.*
+**/__pycache__
+.pytest_cache
+.ruff_cache
+*.db*
+*.sqlite*
+.claude/prompt-log.md
+.claude/tdd-red
+CLAUDE.local.md
+tdd-red.log

@@ -68,6 +68,8 @@ def build_parser():
     seed_cmd = commands.add_parser("seed", help="import claims from a CSV file")
     seed_cmd.add_argument("path")
 
+    commands.add_parser("report", help="show open and overdue counts by tier")
+
     return parser
 
 
@@ -170,6 +172,12 @@ def cmd_seed(conn, args, now):
     print(f"Imported {len(ids)} claims")
 
 
+def cmd_report(conn, args, now):
+    print(f"{'Tier':<10} {'Open':>4} {'Overdue':>8}")
+    for row in claims.claim_report(conn, now=now):
+        print(f"{row['tier']:<10} {row['open']:>4} {row['overdue']:>8}")
+
+
 COMMANDS = {
     "file": cmd_file,
     "list": cmd_list,
@@ -179,6 +187,7 @@ COMMANDS = {
     "escalate": cmd_escalate,
     "history": cmd_history,
     "seed": cmd_seed,
+    "report": cmd_report,
 }
 
 
